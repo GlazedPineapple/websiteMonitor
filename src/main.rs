@@ -8,7 +8,8 @@ use twilio_async::{Twilio, TwilioRequest};
 const URL: &str = "https://www.th3dstudio.com/product/ezout-filament-sensor-kit-standard/";
 // const URL: &str = "https://www.th3dstudio.com/product/ezboard-lite/";
 
-const SLEEP_DURATION: Duration = Duration::from_secs(60);
+const CHECK_DURATION: Duration = Duration::from_secs(60);
+const ALERT_DURATION: Duration = Duration::from_secs(15);
 
 const FROM: &str = "+17812085883";
 
@@ -24,8 +25,8 @@ async fn main() -> color_eyre::Result<()> {
     .wrap_err("Failed to setup twilio")?;
 
     loop {
-        println!("Waiting {} seconds", SLEEP_DURATION.as_secs_f64());
-        task::sleep(SLEEP_DURATION).await;
+        println!("Waiting {} seconds", CHECK_DURATION.as_secs_f64());
+        task::sleep(CHECK_DURATION).await;
 
         let mut response = match surf::get(URL).await {
             Err(_) => {
@@ -71,6 +72,8 @@ async fn main() -> color_eyre::Result<()> {
                     )
                     .run()
                     .await?;
+
+                task::sleep(ALERT_DURATION).await;
             }
 
             break;
