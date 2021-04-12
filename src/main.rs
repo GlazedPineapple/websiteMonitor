@@ -5,8 +5,8 @@ use color_eyre::eyre::{eyre, WrapErr};
 use soup::prelude::*;
 use twilio_async::{Twilio, TwilioRequest};
 
-const URL: &str = "https://www.th3dstudio.com/product/ezout-filament-sensor-kit-standard/";
-// const URL: &str = "https://www.th3dstudio.com/product/ezboard-lite/";
+//const URL: &str = "https://www.th3dstudio.com/product/ezout-filament-sensor-kit-standard/";
+const URL: &str = "https://www.th3dstudio.com/product/ezboard-lite/";
 
 const CHECK_DURATION: Duration = Duration::from_secs(60);
 const ALERT_DURATION: Duration = Duration::from_secs(15);
