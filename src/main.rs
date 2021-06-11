@@ -1,34 +1,46 @@
-use std::{env, time::Duration};
+use std::{
+    collections::hash_map::DefaultHasher,
+    env,
+    hash::{Hash, Hasher},
+    thread,
+    time::Duration,
+};
 
-use async_std::task;
-use color_eyre::eyre::{eyre, WrapErr};
-use soup::prelude::*;
-use twilio_async::{Twilio, TwilioRequest};
+use anyhow::Context;
+use scraper::{Html, Selector};
+use twilio::{Client, OutboundMessage};
 
-//const URL: &str = "https://www.th3dstudio.com/product/ezout-filament-sensor-kit-standard/";
-const URL: &str = "https://www.th3dstudio.com/product/ezboard-lite/";
+const URL: &str = "https://www.schoolspring.com/jobs/?employer=12687";
 
 const CHECK_DURATION: Duration = Duration::from_secs(60);
-const ALERT_DURATION: Duration = Duration::from_secs(15);
 
 const FROM: &str = "+17812085883";
 
-#[async_std::main]
-async fn main() -> color_eyre::Result<()> {
-    color_eyre::install()?;
+fn main() -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(start())
+}
+
+async fn start() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
-    let twilio = Twilio::new(
-        env::var("TWILIO_SID").wrap_err("TWILIO_SID env var required")?,
-        env::var("TWILIO_TOKEN").wrap_err("TWILIO_TOKEN env var required")?,
-    )
-    .wrap_err("Failed to setup twilio")?;
+    let twilio = Client::new(
+        &env::var("TWILIO_SID").context("TWILIO_SID env var required")?,
+        &env::var("TWILIO_TOKEN").context("TWILIO_TOKEN env var required")?,
+    );
+
+    let to = env::var("TO").context("TO env var required")?;
+
+    let mut previous_hash = None;
 
     loop {
         println!("Waiting {} seconds", CHECK_DURATION.as_secs_f64());
-        task::sleep(CHECK_DURATION).await;
+        thread::sleep(CHECK_DURATION);
 
-        let mut response = match surf::get(URL).await {
+        let response = match reqwest::get(URL).await {
             Err(_) => {
                 eprintln!("Failed to fetch {}... Skipping", URL);
                 continue;
@@ -40,47 +52,60 @@ async fn main() -> color_eyre::Result<()> {
             eprintln!("Server returned error code: {}", response.status());
         }
 
-        let body = response.body_string().await.map_err(|e| eyre!(e))?;
+        let html = response
+            .text()
+            .await
+            .context("Failed to get text content of the response")?;
 
-        // dbg!(body);
+        let html = Html::parse_document(&html);
 
-        let soup = Soup::new(&body);
+        let body = {
+            let selector = Selector::parse("body > table:nth-child(5) > tbody:nth-child(1) > tr:nth-child(2) > td:nth-child(1) > table:nth-child(1)").unwrap();
 
-        if soup
-            .class("bundle_availability")
-            .find()
-            .unwrap()
-            .class("stock")
-            .class("out-of-stock")
-            .find()
-            .is_none()
-        {
-            print!("IN STOCK!!! ");
+            match html.select(&selector).next() {
+                Some(table) => table.text().collect::<Vec<_>>(),
+                None => {
+                    eprintln!("Table is missing!!! Trying again...");
 
-            for messages_left in (0u8..4u8).rev() {
-                let fun_message = if messages_left == 0 {
-                    "IM DONE YOU FUCKWIT, YOU BETTER HAVE BOUGHT IT :(".into()
-                } else {
-                    format!("{} more notifications before I off myself", messages_left)
-                };
+                    twilio
+                        .send_message(OutboundMessage::new(
+                            FROM,
+                            &to,
+                            &format!("Ran into unexpected error: Table has gone missing\n{}", URL),
+                        ))
+                        .await?;
+
+                    continue;
+                }
+            }
+        };
+
+        let hash = {
+            let mut hasher = DefaultHasher::new();
+
+            body.hash(&mut hasher);
+
+            hasher.finish()
+        };
+
+        if let Some(previous_hash) = previous_hash {
+            if previous_hash != hash {
+                println!("UPDATE: {} != {}", previous_hash, hash);
 
                 twilio
-                    .send_msg(
+                    .send_message(OutboundMessage::new(
                         FROM,
-                        &env::var("TO").wrap_err("TO env var required")?,
-                        &format!("IN STOCK!!!!\n{}\n{}", fun_message, URL),
-                    )
-                    .run()
+                        &to,
+                        &format!("NEW POSITIONS AVAILABLE: \n{}", URL),
+                    ))
                     .await?;
-
-                task::sleep(ALERT_DURATION).await;
+            } else {
+                print!("nothing...")
             }
-
-            break;
         } else {
-            print!("OUT OF STOCK... ");
-        }
-    }
+            print!("Got first hash: {}...", hash);
+        };
 
-    Ok(())
+        previous_hash = Some(hash);
+    }
 }
